@@ -1,0 +1,260 @@
+# ============================================================
+# DGF Connect — GitHub Actions CI/CD
+#
+# File này thuộc GitHub public repo (dgf-connect-ci).
+# KHÔNG commit file này lên GitLab repo (source code).
+#
+# 3 cách trigger:
+#   1. deploy.sh (local)        — tự động điền đủ inputs
+#   2. GitLab CI (.gitlab-ci.yml) — tự động điền đủ inputs
+#   3. GitHub UI (thủ công)     — chỉ cần nhập tag, còn lại tự parse
+# ============================================================
+
+name: Build & Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag trên GitLab (bắt buộc) — VD: v1.0.1+5-dev"
+        required: true
+        type: string
+      flavor:
+        description: "Flavor — để trống sẽ tự parse từ tag"
+        required: false
+        type: choice
+        options: ["", dev, prod]
+        default: ""
+      version:
+        description: "Version name — để trống sẽ tự parse từ tag"
+        required: false
+        type: string
+        default: ""
+      build_number:
+        description: "Build number — để trống sẽ tự parse từ tag"
+        required: false
+        type: string
+        default: ""
+      platform:
+        description: "Platform cần build (default: both)"
+        required: false
+        type: choice
+        options: [ios, android, both]
+        default: "both"
+
+env:
+  FLUTTER_VERSION: "3.29.0"
+  JAVA_VERSION: "17"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+# ── Parse tag thành flavor / version / build_number ─────────────
+# Tag format: v{version}+{build_number}-{flavor}
+# Ví dụ: v1.0.1+5-dev  →  flavor=dev, version=1.0.1, build_number=5
+
+jobs:
+# ============================================================
+# Job 1: Android — ubuntu-latest
+# ============================================================
+  deploy-android:
+    name: "Android"
+    runs-on: ubuntu-latest
+    if: inputs.platform == 'android' || inputs.platform == 'both'
+    steps:
+      - name: Checkout CI repo
+        uses: actions/checkout@v4
+
+      - name: Parse inputs từ tag
+        id: params
+        run: |
+          TAG="${{ inputs.tag }}"
+          # Parse flavor từ tag nếu input trống
+          if [ -z "${{ inputs.flavor }}" ]; then
+            FLAVOR="${TAG##*-}"
+          else
+            FLAVOR="${{ inputs.flavor }}"
+          fi
+          # Parse version và build_number từ tag nếu input trống
+          if [ -z "${{ inputs.version }}" ]; then
+            # TAG dạng: v1.0.1+5-dev → strip "v" và "-dev" → 1.0.1+5
+            MIDDLE=$(echo "$TAG" | sed 's/^v//' | sed "s/-${FLAVOR}$//")
+            VERSION=$(echo "$MIDDLE" | cut -d'+' -f1)
+            BUILD_NUMBER=$(echo "$MIDDLE" | cut -d'+' -f2)
+          else
+            VERSION="${{ inputs.version }}"
+            BUILD_NUMBER="${{ inputs.build_number }}"
+          fi
+          echo "flavor=$FLAVOR"         >> $GITHUB_OUTPUT
+          echo "version=$VERSION"       >> $GITHUB_OUTPUT
+          echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+          echo "──────────────────────────────────"
+          echo "  Tag          : $TAG"
+          echo "  Flavor       : $FLAVOR"
+          echo "  Version      : $VERSION"
+          echo "  Build number : $BUILD_NUMBER"
+          echo "──────────────────────────────────"
+
+      - name: Clone source từ GitLab
+        run: |
+          git clone \
+            "https://gitlab-ci-token:${{ secrets.GITLAB_DEPLOY_TOKEN }}@gitlab.com/${{ secrets.GITLAB_REPO_PATH }}.git" \
+            source
+          cd source && git checkout "${{ inputs.tag }}"
+
+      - name: Setup Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup Flutter ${{ env.FLUTTER_VERSION }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Setup Ruby & Fastlane
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          working-directory: source
+          bundler-cache: true
+
+      - name: Flutter pub get
+        working-directory: source
+        run: flutter pub get
+
+      - name: Generate code (build_runner)
+        working-directory: source
+        run: flutter pub run build_runner build --delete-conflicting-outputs
+
+      - name: Fastlane — Deploy Android (${{ steps.params.outputs.flavor }})
+        working-directory: source
+        env:
+          BUILD_VERSION: ${{ steps.params.outputs.version }}
+          BUILD_NUMBER:  ${{ steps.params.outputs.build_number }}
+          FLUTTER_CMD: flutter
+          ANDROID_KEYSTORE_BASE64:          ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD:        ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS:                ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD:             ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: bundle exec fastlane android deploy_${{ steps.params.outputs.flavor }}
+
+# ============================================================
+# Job 2: iOS — macos-26
+# ============================================================
+  deploy-ios:
+    name: "iOS"
+    runs-on: macos-26
+    if: inputs.platform != 'android'
+    steps:
+      - name: Checkout CI repo
+        uses: actions/checkout@v4
+
+      - name: Parse inputs từ tag
+        id: params
+        run: |
+          TAG="${{ inputs.tag }}"
+          if [ -z "${{ inputs.flavor }}" ]; then
+            FLAVOR="${TAG##*-}"
+          else
+            FLAVOR="${{ inputs.flavor }}"
+          fi
+          if [ -z "${{ inputs.version }}" ]; then
+            MIDDLE=$(echo "$TAG" | sed 's/^v//' | sed "s/-${FLAVOR}$//")
+            VERSION=$(echo "$MIDDLE" | cut -d'+' -f1)
+            BUILD_NUMBER=$(echo "$MIDDLE" | cut -d'+' -f2)
+          else
+            VERSION="${{ inputs.version }}"
+            BUILD_NUMBER="${{ inputs.build_number }}"
+          fi
+          echo "flavor=$FLAVOR"             >> $GITHUB_OUTPUT
+          echo "version=$VERSION"           >> $GITHUB_OUTPUT
+          echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: Clone source từ GitLab
+        run: |
+          git clone \
+            "https://gitlab-ci-token:${{ secrets.GITLAB_DEPLOY_TOKEN }}@gitlab.com/${{ secrets.GITLAB_REPO_PATH }}.git" \
+            source
+          cd source && git checkout "${{ inputs.tag }}"
+
+      - name: Setup Flutter ${{ env.FLUTTER_VERSION }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Setup Ruby & Fastlane
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          working-directory: source
+          bundler-cache: true
+
+      - name: Flutter pub get
+        working-directory: source
+        run: flutter pub get
+
+      - name: Generate code (build_runner)
+        working-directory: source
+        run: flutter pub run build_runner build --delete-conflicting-outputs
+
+      - name: Install CocoaPods dependencies
+        working-directory: source/ios
+        run: bundle exec pod install --repo-update
+
+      - name: Setup iOS signing (${{ steps.params.outputs.flavor }})
+        working-directory: source
+        run: bundle exec fastlane ios prepare_${{ steps.params.outputs.flavor }}
+
+      - name: Switch Xcode version
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_26.4.1.app
+          echo "=== Xcode sau khi switch ==="
+          xcode-select -p
+          xcodebuild -version
+
+      - name: Build IPA archive (${{ steps.params.outputs.flavor }})
+        working-directory: source
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+        run: |
+          flutter build ipa \
+            --flavor ${{ steps.params.outputs.flavor }} \
+            --dart-define=FLAVOR=${{ steps.params.outputs.flavor }} \
+            --release \
+            --build-name=${{ steps.params.outputs.version }} \
+            --build-number=${{ steps.params.outputs.build_number }}
+          echo "──────── build/ios/ structure ────────"
+          find build/ios -maxdepth 4 | sort
+          echo "──────────────────────────────────────"
+
+      - name: Export IPA (${{ steps.params.outputs.flavor }})
+        working-directory: source
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+        run: |
+          ARCHIVE=$(find build/ios/archive -name "*.xcarchive" | head -1)
+          if [ -z "$ARCHIVE" ]; then
+            echo "ERROR: no .xcarchive found in build/ios/archive"
+            find build/ios -name "*.xcarchive" 2>/dev/null || echo "none anywhere"
+            exit 1
+          fi
+          echo "Archive: $ARCHIVE"
+          mkdir -p build/ios/ipa
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE" \
+            -exportPath build/ios/ipa \
+            -exportOptionsPlist ios/ExportOptions_${{ steps.params.outputs.flavor }}.plist
+          echo "──────── build/ios/ipa/ contents ─────"
+          find build/ios/ipa | sort
+          echo "──────────────────────────────────────"
+
+      - name: Upload to TestFlight (${{ steps.params.outputs.flavor }})
+        working-directory: source
+        env:
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+        run: bundle exec fastlane ios deploy_${{ steps.params.outputs.flavor }}
