@@ -96,7 +96,7 @@ jobs:
       - name: Clone source từ GitLab
         run: |
           git clone \
-            "https://gitlab-ci-token:${{ secrets.GITLAB_DEPLOY_TOKEN }}@gitlab.com/${{ secrets.GITLAB_REPO_PATH }}.git" \
+            "https://${{ secrets.GITLAB_DEPLOY_TOKEN_USER }}:${{ secrets.GITLAB_DEPLOY_TOKEN }}@gitlab.com/${{ secrets.GITLAB_REPO_PATH }}.git" \
             source
           cd source && git checkout "${{ inputs.tag }}"
 
@@ -176,7 +176,7 @@ jobs:
       - name: Clone source từ GitLab
         run: |
           git clone \
-            "https://gitlab-ci-token:${{ secrets.GITLAB_DEPLOY_TOKEN }}@gitlab.com/${{ secrets.GITLAB_REPO_PATH }}.git" \
+            "https://${{ secrets.GITLAB_DEPLOY_TOKEN_USER }}:${{ secrets.GITLAB_DEPLOY_TOKEN }}@gitlab.com/${{ secrets.GITLAB_REPO_PATH }}.git" \
             source
           cd source && git checkout "${{ inputs.tag }}"
 
