@@ -94,6 +94,19 @@ jobs:
         working-directory: source
         run: flutter pub run build_runner build --delete-conflicting-outputs
 
+      - name: Write env file (${{ steps.params.outputs.flavor }})
+        working-directory: source
+        env:
+          ENV_FILE_DEV:  ${{ secrets.ENV_FILE_DEV }}
+          ENV_FILE_PROD: ${{ secrets.ENV_FILE_PROD }}
+        run: |
+          mkdir -p assets/env
+          if [ "${{ steps.params.outputs.flavor }}" = "prod" ]; then
+            echo "$ENV_FILE_PROD" > assets/env/.env.prod
+          else
+            echo "$ENV_FILE_DEV" > assets/env/.env.dev
+          fi
+
       - name: Fastlane — Deploy Android (${{ steps.params.outputs.flavor }})
         working-directory: source
         env:
@@ -172,6 +185,19 @@ jobs:
         working-directory: source/ios
         run: bundle exec pod install --repo-update
 
+      - name: Write env file (${{ steps.params.outputs.flavor }})
+        working-directory: source
+        env:
+          ENV_FILE_DEV:  ${{ secrets.ENV_FILE_DEV }}
+          ENV_FILE_PROD: ${{ secrets.ENV_FILE_PROD }}
+        run: |
+          mkdir -p assets/env
+          if [ "${{ steps.params.outputs.flavor }}" = "prod" ]; then
+            echo "$ENV_FILE_PROD" > assets/env/.env.prod
+          else
+            echo "$ENV_FILE_DEV" > assets/env/.env.dev
+          fi
+
       - name: Setup iOS signing (${{ steps.params.outputs.flavor }})
         working-directory: source
         run: bundle exec fastlane ios prepare_${{ steps.params.outputs.flavor }}
@@ -190,7 +216,7 @@ jobs:
         run: |
           flutter build ipa \
             --flavor ${{ steps.params.outputs.flavor }} \
-            --dart-define=FLAVOR=${{ steps.params.outputs.flavor }} \
+            --dart-define-from-file=assets/env/.env.${{ steps.params.outputs.flavor }} \
             --release \
             --build-name=${{ steps.params.outputs.version }} \
             --build-number=${{ steps.params.outputs.build_number }}
